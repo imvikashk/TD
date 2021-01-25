@@ -1,0 +1,85 @@
+
+Part I – Enable RLS on required SQL DW tables
+A.	Predicate function with Market, Business area and Org unit as parameters:
+Use this predicate function when the data has references to Markets:
+
+CREATE FUNCTION [RLS].[AccessPredicate](@MARKETNAME varchar(20), @BUSINESSAREA varchar(20), @ORGUNIT varchar(20) )
+ RETURNS TABLE
+ WITH SCHEMABINDING
+AS
+ RETURN SELECT 1 AS accessResult FROM RLS.USER_MAPPING
+ where
+ USERID = CURRENT_USER
+ and (MARKETNAME<>'ALL' AND MARKETNAME = @MARKETNAME OR (MARKETNAME='ALL' AND @MARKETNAME IS NOT NULL))
+ and (BUSINESSAREA<>'ALL' AND BUSINESSAREA = @BUSINESSAREA OR (BUSINESSAREA='ALL' AND @BUSINESSAREA IS NOT NULL))
+ and (ORGUNIT<>'ALL' AND ORGUNIT = @ORGUNIT OR (ORGUNIT='ALL' AND @ORGUNIT IS NOT NULL))
+ GO
+
+
+B.	Predicate function with Market, Region, Business area and Org unit as parameters:
+Use this predicate function when the entities have references to regions, and market references are missing.
+
+CREATE FUNCTION [RLS].[AccessPredicate](@MARKETNAME varchar(20), @ CREATE FUNCTION [RLS].[GlobalAccessPredicate] 
+(@Region [nvarchar](10),@MARKETNAME [varchar](20),@BUSINESSAREA [varchar](20),@ORGUNIT [varchar](20)) 
+RETURNS TABLE  WITH SCHEMABINDING  AS  
+RETURN 
+SELECT 1 AS accessResult 
+FROM RLS.USER_MAPPING   
+WHERE   USERID = CURRENT_USER   and ((MARKETNAME<>'ALL' AND MARKETNAME = @MARKETNAME) OR 
+(MARKETNAME='ALL') OR 
+( MARKETNAME<>'ALL' AND @MARKETNAME IS NULL AND  (SELECT 1 FROM [RLS].[COUNTRY_REGION_MAPPING] WHERE CRM_REGION_NAME=@REGION and MARKETNAME= ISO3_CODE)=1) )   
+and ((BUSINESSAREA<>'ALL' AND BUSINESSAREA = @BUSINESSAREA) OR (BUSINESSAREA='ALL'))   AND ((ORGUNIT<>'ALL' AND ORGUNIT = @ORGUNIT) OR (ORGUNIT='ALL'))
+ GO
+
+C.	Security Policy to add the filter predicate to the entities (Global and Non-Global):
+CREATE SECURITY POLICY [RLS].[AccessPolicy]
+ ADD FILTER PREDICATE [RLS].[AccessPredicate](MARKETNAME, BUSINESSAREA, ORGUNIT) ON TABLE NAME
+GO
+
+CREATE SECURITY POLICY [RLS].[GlobalAccessPolicy]
+ ADD FILTER PREDICATE [RLS].[AccessPredicate](REGION,MARKETNAME, BUSINESSAREA, ORGUNIT) ON TABLE NAME
+GO
+
+
+
+Part II – Provide SQL DW access through RLS – Only to be executed by Pharma_Azure_Support team. 
+A.	Location of the RLS mapping files for Prod environment:
+Storage Account - rxglobalsacprod
+Container Name - r1-metadata
+Mapping File Name - USER_MAPPING.csv
+Country-to-Region Mapping File Name - COUNTRY_REGION_MAPPING.csv
+ 
+B.	Steps to provide RLS access to SQL DW:
+
+1.	Provide Read-Only permissions at the SQL DW and also at the Schema level to the Users.
+ 
+2.	Update COUNTRY_REGION_MAPPING.csv:
+This sheet is maintained and versioned in the Github repository - https://mygithub.gsk.com/gsk-tech/Repo-PharmaDA-AzureGovernance. Any updates to this sheet must be done in Github repository first and then uploaded to the r1-metadata blob container.
+Region to country mappings are maintained in this file and uploaded to blob container r1-metadata. A separate column can be added to support initiative specific country to region mappings.
+
+3.	Update USER_MAPPING sheet:
+This sheet is maintained and versioned in the Github repository - https://mygithub.gsk.com/gsk-tech/Repo-PharmaDA-AzureGovernance. Any updates to this sheet must be done in Github repository first and then uploaded to the r1-metadata blob container.
+Add the full GSK e-mail ID or SQL Login to the above .csv file, along with the following details:
+a.	USERID – Full GSK e-mail ID.
+b.	MUDID – MUD-ID in case of individuals. In case of SQL Login, any short form with less than 20 characters.
+c.	MARKETNAME – Three letter ISO code of the country/market (or) ALL.
+d.	BUSINESSAREA – Can be one of the four allowed values – Commercial, Medical, Common, or ALL.
+e.	ORGUNIT – Can be one of the three allowed values - Pharma, ViiV or ALL.
+ 
+4.	Upload the above updated .csv files, latest versions taken from the Github repository, to the container specified above in Production (or respective environment). Double check the container to ensure that the right version of the .csv files has been uploaded to the container.
+
+5.	Execute the below ADF Pipeline in Production (or respective environment)
+a.	Data Factory Name – rxglobaladfprod
+b.	Pipeline folder Name – RLS
+c.	Pipeline Name - PL_Global_SQLDW_RLS 
+6.	Monitor the pipeline and ensure that the run is successful.
+ 
+Note: Before inserting new data, the Pipeline deletes existing data from the target SQL DW RLS mapping table. All existing accesses would have been deleted if the pipeline fails. Hence, if the pipeline fails, immediately revert back the .csv file to previous version, and re-run the pipeline so that it is successful and the accesses are restored. Further debug the actual issue, and re-run the pipeline with correct .csv file.
+ 
+7.	Check the RLS mapping table in SQL DW and ensure that new entries have been inserted into it. RLS mapping table details are:
+a.	a.     SQL Server Name – rxglobalsqlsrvprod
+b.	b.     SQL DW Name - RxGlobalSQLDWProd
+c.	Table Name -          [RLS].[USER_MAPPING]
+d.	Query -                    SELECT * FROM [RLS].[USER_MAPPING];
+
+Note: RLS has been implemented only in CRMF schema as of today. Hence, this process is applicable only to CRMF schema for now. Permissions to rest of the schemas should be given our conventional way.
