@@ -1,0 +1,524 @@
+GlobalKPI
+
+MANIFEST.in
+include GlobalFoundation_KPI/Kpi_package/README.md
+
+.gitignore
+.gitignore
+GlobalFoundation_KPI.egg-info
+dist
+build
+
+README.md
+# Repo-PharmaDA-G-All-GlobalFoundation_KPI
+
+requirements.txt
+python-dateutil==2.8.1
+ruamel.yaml.clib==0.2.0
+databricks-utils==0.0.7
+jinjasql
+jsonschema==3.0.1
+numpy
+numpydoc
+pandas
+path.py==12.0.1
+pkginfo==1.5.0.1
+pytest
+jinja2
+pyarrow
+ruamel.yaml
+
+
+setup.py
+from setuptools import setup, find_packages 
+  
+with open('requirements.txt') as f: 
+    requirements = f.readlines() 
+  
+long_description = 'Global KPI framework' 
+  
+setup( 
+        name ='GlobalFoundation_KPI', 
+        version ='0.0.1', 
+        author ='Global KPI team', 
+        author_email ='', 
+        url ='git url', 
+        description ='Global KPI framework to provide access to KPI data', 
+        long_description = long_description, 
+        long_description_content_type ="text/markdown", 
+        license ='', 
+        packages = find_packages(), 
+        entry_points ={ 
+            'console_scripts': [ 
+                'GlobalKPI = KPI.__main__:main'
+            ] 
+        }, 
+        classifiers =( 
+            "Programming Language :: Python :: 3", 
+            "License :: OSI Approved :: MIT License", 
+            "Operating System :: OS Independent", 
+        ), 
+        install_requires = requirements, 
+        zip_safe = False
+) 
+
+
+
+test_unittestcase.py
+import pytest
+from Kpi_package import kpi_etl
+
+
+def test_exception_incompletecsv():
+      
+  ################################# 
+  # inncomplete list of srouce file. teamp view will be created
+  # will raise exception for missing under lyling 'Table or view not found'
+  # ################################
+
+  clsKPI=kpi_etl.DataFeed('Activity','crmf' ,'TEST_KPI_FROMINC',
+                                  'LATAM',
+                                  '/mnt/blob-devtest-kpi-foundation/unittest/KPI_Library_IncVal.csv')
+  clsKPI.calculate_kpi_main()
+  tempdf=clsKPI.spark.sql("Select distinct ERRORMESSAGE from analytics.H_KPI_LOG where KPI_Step='TEST_STG_KPI_FROMINC'")
+  varerrmsg=tempdf.collect()[0][0]
+  varerrmsg=varerrmsg.split(":")[0]
+  assert(varerrmsg=="'Table or view not found")
+
+def test_exception():
+      
+  ######### passs dummy filepath, will raise exception ##########  
+  clsKPI=kpi_etl.DataFeed('Activity','crmf' ,'TEST_CALLS_AG_M',
+                                  'LATAM',
+                                  '/mnt/blob-devtest-kpi-foundation/unittest/KPI_Library_Test.csv')
+  clsKPI.calculate_kpi_main()
+  tempdf=clsKPI.spark.sql("Select distinct ERRORMESSAGE from analytics.H_KPI_LOG where ERRORMESSAGE like '%KPI_Library_Test%'")
+  varerrmsg=tempdf.collect()[0][0]
+  assert(varerrmsg=="'Path does not exist: dbfs:/mnt/blob-devtest-kpi-foundation/unittest/KPI_Library_Test.csv;'")
+
+@pytest.fixture
+def clsKPI():
+  clsKPI=kpi_etl.DataFeed('Activity','CRMF','TEST_CALLS_AG_M','', '/mnt/blob-devtest-kpi-foundation/unittest/KPI_Library.csv')
+  clsKPI.calculate_kpi_main()
+  return clsKPI
+
+
+def test_configdataframe(clsKPI):
+
+  ########## check if library dataframes are created ###########  
+  assert (clsKPI.kpilist_org.rdd.isEmpty()==False)
+
+def test_applyparam(clsKPI):
+  
+  ########## check if dataframes are created after filter on passed paramters ###########  
+
+  assert (clsKPI.kpilist.rdd.isEmpty()==False)
+
+def test_srctemptbl(clsKPI): 
+
+  ########### take record count from src file temp view and check >0 ##########
+
+  srctemptbl=clsKPI.spark.sql("select count(*) as RC from global_temp.F_CALL_SUMMARY")  
+  strval=srctemptbl.select('RC').collect()
+  varvalue=strval[0][0]  
+  assert(varvalue>0)
+
+def test_stgtemptbl(clsKPI):     
+
+  ########### take record count from staging tempview and check >0 ##########
+
+  deltatbl=clsKPI.spark.sql("select count(*) as RC from global_temp.TEST_STG_CALLS_AG_M")  
+  strval2=deltatbl.select('RC').collect()
+  varval2=strval2[0][0]  
+  assert(varval2>0)
+
+
+def test_presistenttble(clsKPI):
+      
+  ############################
+  # extract record count from table
+  #  to check if table exist 
+  # #########################
+  
+  tempdf=clsKPI.spark.sql("Select count(*) from analytics.TEST_CALLS_AG_M")
+  varerrmsg=tempdf.collect()[0][0]
+  assert(varerrmsg>0)
+
+
+def test_capturelog(clsKPI): 
+
+  ###########################
+  # pass vlaue in capture log function
+  #  and check entry in log file
+  ##########################
+  clsKPI.spark.sql("delete from analytics.H_KPI_LOG where status='test_success'")
+  clsKPI.proc_capture_log('TestKPI1', 'test_successrecord','test_success', 'Testcasentry')                              
+  tempdf=clsKPI.spark.sql("Select distinct KPI_Step from analytics.H_KPI_LOG where status='test_success'")    
+  varKPI1=tempdf.select('KPI_Step').collect()[0][0]  
+  assert(varKPI1=='TestKPI1')
+
+
+KPI_PACKAGE folder>
+	__init__.py
+	content blank
+	
+	__main__.py
+	"""
+#####################################################################################################
+# Program Name : KPI Foundation Layer
+# Author       : KPI Foundation Development Team
+# Purpose      : Global Framework for KPI
+####
+#####################################################################################################
+
+################ Import Modules and Library ################
+""" 
+import argparse
+from Kpi_package import kpi_etl
+"""Module to read argumenet passed from command line and initializing class instance"""
+def main():
+    parser = argparse.ArgumentParser(
+        prog='GlobalKPI', description='Use this to calculate KPI data eg: globalKPI -n Total_Calls_AG_Terr -g Activity -r LATAM -c /mnt/blob-devtest-kpi-foundation/Config/KPI_Template.csv -t /mnt/devtestgen2analytics/Pharma/Commercial/Global/Activity/')
+    parser.add_argument('-n', '--KPI_Name', type=str,
+                        help='Please provide KPI Name', required=True)
+    parser.add_argument('-g', '--KPI_Group', type=str,
+                        help='Please provide KPI Group', required=True)
+    parser.add_argument('-r', '--KPI_Region', type=str,
+                        help='Please provide KPI Region', required=True)
+    parser.add_argument('-c', '--KPI_config', type=str,
+                        help='Please provide KPI Configuration file path', required=True)
+    parser.add_argument('-s', '--KPI_Datasource', type=str,
+                        help='Please provide KPI Data source name', required=True)
+
+    args = parser.parse_args()
+    param_json = vars(args)
+    print(param_json)
+    data_feed = kpi_etl.DataFeed(param_json['KPI_Group'], param_json['KPI_Datasource'], param_json['KPI_Name'],
+                                param_json['KPI_Region'],param_json['KPI_config'])
+    data_feed.calculate_kpi_main()
+
+
+	kpi_etl.py
+###########################################################################################
+# Program Name : KPI Foundation Layer
+# Author       : KPI Foundation Development Team
+# Purpose      : Global Framework for KPI
+############################################################################################
+
+
+
+################ Import Modules and Library ################
+from pyspark.sql import SparkSession
+
+import datetime
+import uuid
+###########################################################
+
+class DataFeed():    
+    """ Preare and write data into Data lake/Delta tables basis """
+    
+    # pylint: disable=too-many-instance-attributes,too-many-arguments
+    def __init__(self, param_group,param_source,param_kpi, param_region,
+                 library_config_path):
+        ################ Initializing Variables ################
+        self.spark = SparkSession.builder.getOrCreate()
+        self.param_group = param_group
+        self.param_kpi = param_kpi
+        self.param_region = param_region
+        self.library_config_path = library_config_path        
+        self.flag_logtbl=1
+        self.param_source = param_source
+        self.exec_process_time = datetime.datetime.now()
+        self.exec_start_time = datetime.datetime.now()
+        
+      ############## Initializing Dataframes ##############
+        
+        self.kpilist_kpi = None
+        self.kpilist_org = None
+        self.kpilist = None
+        self.kpilist_srcfiles = None
+        self.kpilist_kpi = None
+
+        ############## Truncating Stg Log Table ##############      
+        
+    def proc_capture_log(self, kpi_step, func_nm, status, err_desc):
+      
+      """ Function to Capture Logging: error,success and validation """
+      
+      self.spark.sql("""Insert into analytics.h_kpi_log select '{0}','{1}' Group,'{2}' SourceName,'{3}' Region,'{4}' KPI_Step,
+      '{5}' Process_Step,'{6}' Processing_Date,'{7}' Start_Time, current_Timestamp() End_Time, '{8}' Status,
+      "'{9}'" ErrorMessage""".format(
+        uuid.uuid4(),self.param_group.replace("'",""),self.param_source.replace("'",""),self.param_region.replace("'",""),kpi_step,func_nm,
+        self.exec_process_time,self.exec_start_time,status,err_desc))                                                                                 
+  
+    def create_persitent_tables(self, stg_preprocessing_qry, fname,col_partitionby,path_datalake,schema_loadtype):
+        
+        """ Function to Create Delta Tables and Data Lake files """
+       
+        calculate_kpi = self.spark.sql(stg_preprocessing_qry)
+        calculate_kpi.write.format("delta").mode(schema_loadtype).option(
+            "overwriteSchema", "true").partitionBy(col_partitionby).save(path_datalake + fname)
+        
+        self.proc_capture_log(fname, 'create_persitent_tables',
+                              'success', 'File is Created in Data Lake')
+        
+        self.exec_start_time = datetime.datetime.now()
+        self.spark.sql("DROP TABLE IF EXISTS analytics." + fname)
+        self.spark.sql("CREATE TABLE analytics." + fname +
+                  " USING DELTA LOCATION '" + path_datalake + fname + "'")
+        
+        ############## Record successfull message ############## col_partitionby,path_datalake,schema_loadtype
+          
+        self.proc_capture_log(fname, 'create_persitent_tables',
+                              'success', 'Delta Table is Created')
+
+    def read_kpi_config(self):
+
+        """ Read Library/Mapping CSV file from BLOB """
+        
+        self.exec_start_time = datetime.datetime.now()
+        try:
+            self.kpilist_org = self.spark.read.csv(self.library_config_path,
+                                                header="true", escape="\"", multiLine="true",
+                                                inferSchema="true")
+            
+            if self.kpilist_org.rdd.isEmpty():
+                self.proc_capture_log(
+                        'kpilist_org', 'read_kpi_config', 'validation', 'Empty_DF')
+
+            self.kpilist_org.createOrReplaceTempView("kpilist_org")
+            
+            
+            ############# Record successfull message ##############
+
+            self.proc_capture_log(
+                'Read_CSV', 'read_kpi_config', 'success', 'NA')
+        except Exception as err:
+            #raise Exception(e)
+            err_desc = str(err).replace("'", "").replace('"', '').replace("\n", " ")
+
+            ############# Inserting into log in table #####################
+
+            self.proc_capture_log(
+                'Read_CSV', 'read_kpi_config', 'error', err_desc)
+
+    def get_kpilist(self):
+      
+        """ Filter mapping on the basis of parameters. And create TempViews for selected rows """
+        
+        self.exec_start_time = datetime.datetime.now()
+        try:
+            grp_in_cls = self.param_group.replace(",", "','")
+            kpi_in_cls = self.param_kpi.replace(",", "','")
+            rgn_in_cls = self.param_region.replace(",", "','")
+            
+            sqlstrkpilist = "select * from kpilist_org where 1=1"
+            if self.param_group != 'ALL' and self.param_group !='':
+                sqlstrkpilist = sqlstrkpilist + \
+                    " and Group In ('" + grp_in_cls + "')"
+            if self.param_kpi != 'ALL' and self.param_kpi !='':
+                sqlstrkpilist = sqlstrkpilist + \
+                    " and KPI In('" + kpi_in_cls + "')"
+            if self.param_region != 'ALL' and self.param_region !='':
+               sqlstrkpilist = sqlstrkpilist + \
+                   " and Region In('" + rgn_in_cls + "')"
+            
+            self.kpilist = self.spark.sql(sqlstrkpilist)
+            if self.kpilist.rdd.isEmpty():
+                self.proc_capture_log(
+                            'kpilist', 'get_kpilist', 'validation', 'Empty_DF')
+            self.kpilist.createOrReplaceGlobalTempView("kpilist")
+              
+            ############## Record successfull message ##############
+
+            self.proc_capture_log(
+                'apply_parameter', 'get_kpilist', 'success', 'NA')
+        except Exception as err_dsc:
+            #raise Exception(e)
+            err_desc = str(err_dsc).replace("'", "").replace('"', '').replace("\n", " ")
+
+            ############## Inserting into Stg Log table ##############
+
+            self.proc_capture_log('apply_parameter', 'get_kpilist', 'error', "'"+err_desc + "'")
+    
+    def create_source_temp_tables(self):
+        """ Load source data files and create tempview """
+       
+        self.kpilist_srcfiles = self.spark.sql(
+            """select distinct SourceFileName,MountPath, SourceFileName_PATH
+               from global_temp.kpilist where SourceFileName!='NA' or
+             SourceFileName is not null""")
+        if self.kpilist_srcfiles.rdd.isEmpty():
+          self.proc_capture_log(
+                      'kpilist_srcfiles', 'create_SourceData_temp_tables', 'validation', 'Empty_DF')
+        for src_file_nm, mount_path, src_file_nm_path in zip(
+            self.kpilist_srcfiles.select("SourceFileName").collect(),
+            self.kpilist_srcfiles.select("MountPath").collect(),
+            self.kpilist_srcfiles.select("SourceFileName_PATH").collect()):
+          
+            
+            ############## Validate Null/Blank Values ##################
+          
+            self.exec_start_time = datetime.datetime.now()
+            if src_file_nm[0] and mount_path[0] and src_file_nm_path[0]:
+                tmp_str_name = str(src_file_nm[0])
+                tmp_str_name = tmp_str_name.replace("\n", "")
+                src_file_list = tmp_str_name.split(',')
+                for each_file in zip(src_file_list):
+                    self.exec_start_time = datetime.datetime.now()
+                    try:                       
+                        str_file = str(each_file[0]).replace('"', '')
+                        src_file_path = mount_path[0] + \
+                            src_file_nm_path[0]+str_file
+                        
+                        temp_df = self.spark.read.load(
+                            src_file_path, format="delta", inferSchema="true", header="true")
+                        temp_df.createOrReplaceGlobalTempView(str_file)
+
+                        ########## Record Successfull Message ##############
+                        self.proc_capture_log(
+                            str_file, 'create_source_temp_tables', 'success', 'NA')
+                    except Exception as err:
+                        
+                        err_desc = str(err).replace("'", "").replace('"', '').replace("\n", " ")
+
+                        ########### Inserting into Stg Log Table #################
+
+                        self.proc_capture_log(str_file,'create_SourceData_tables','error', err_desc)
+            else:
+
+                ############ Record Validation Fail ##################
+
+                self.proc_capture_log(
+                    'sourcetable', 'create_SourceData_temp_tables', 'validation', 'Fail')
+    
+    def create_stg_temp_tables(self):
+        
+        """ Create staging Temp Tables """
+
+        self.kpilist_srcfiles = self.spark.sql(
+            "select distinct TargetKPITableName,ScriptPath,STGProcessorder from global_temp.kpilist where Temp_Flag=1 order by STGProcessorder")
+        
+        for tgt_tbl_nm, script_path in zip(
+            self.kpilist_srcfiles.select("TargetKPITableName").collect(),
+            self.kpilist_srcfiles.select("ScriptPath").collect()):
+            self.exec_start_time = datetime.datetime.now()
+            try:
+                ############## Validate Null/Blank Values ##############
+                if tgt_tbl_nm[0] and script_path[0]:
+                    fname = tgt_tbl_nm[0]
+                    sql_script_path = script_path[0]
+                    
+                    sql_txt = self.spark.sparkContext.wholeTextFiles('dbfs:'+sql_script_path)
+                    stg_preprocessing_qry = sql_txt.collect()[0][1]
+                    
+                    tmp_stg_pre_df = self.spark.sql(stg_preprocessing_qry)
+                    tmp_stg_pre_df.createOrReplaceGlobalTempView(fname)
+
+                    ############## Record Successfull Message ##############
+
+                    self.proc_capture_log(
+                        fname, 'create_stg_temp_tables', 'success', 'NA')
+                else:
+                    
+                    fname = tgt_tbl_nm[0]
+                    self.proc_capture_log(
+                        fname, 'create_stg_temp_tables', 'validation', 'Fail')
+            except Exception as err:
+                #raise Exception(e)
+                err_desc = str(err).replace("'", "").replace(
+                    '"', '').replace("\n", " ")
+
+                ################ Inserting into Stg Log table ################
+
+                self.proc_capture_log(
+                    fname, 'create_stg_temp_tables', 'error', err_desc)
+    
+    def calculate_kpi(self):
+        
+        """ Calcaulate KPIs:Persistent delta tables in databrick and delta files in datalake """
+        
+        self.kpilist_kpi = self.spark.sql(
+            """select distinct TargetKPITableName,ScriptPath,Country,Market,
+            Region,Partitionby,DataLakePath,LoadType from global_temp.kpilist where Temp_Flag=0 """)
+        
+        if self.kpilist_kpi.rdd.isEmpty():
+          self.proc_capture_log(
+                      'kpilist_kpi', 'calculate_kpi', 'validation', 'Empty_DF')
+        self.kpilist_kpi.show()
+        for tgt_tbl_nm, script_path, country, region, market,partitionby,datalakepath,loadtype in zip(
+            self.kpilist_kpi.select("TargetKPITableName").collect(),
+            self.kpilist_kpi.select("ScriptPath").collect(),
+            self.kpilist_kpi.select("Country").collect(),
+            self.kpilist_kpi.select("Region").collect(),
+            self.kpilist_kpi.select("Market").collect(),
+            self.kpilist_kpi.select("Partitionby").collect(),
+            self.kpilist_kpi.select("DataLakePath").collect(),
+            self.kpilist_kpi.select("LoadType").collect()):
+          
+          self.exec_start_time = datetime.datetime.now()
+          
+          try:
+
+            ############## Validate Null/Blank Values ##############
+
+            if tgt_tbl_nm[0] and script_path[0] and country[0] and region[0] and market[0] \
+                and partitionby[0] and datalakepath[0] and loadtype[0]:
+                
+                fname = tgt_tbl_nm[0]
+                  
+                sql_script_path = script_path[0]
+                col_partitionby=partitionby[0]
+                path_datalake=datalakepath[0]
+                schema_loadtype=loadtype[0]
+                
+                paramctry="'" + country[0].replace(",", "','") + "'"
+                paramrgn="'" + region[0].replace(",", "','") + "'"
+                parammkt="'" + market[0].replace(",", "','") + "'"
+                
+                sql_file = self.spark.sparkContext.wholeTextFiles('dbfs:'+sql_script_path)                
+                
+                sql_script_qry = sql_file.collect()[0][1]                
+                
+                sql_script_qry = sql_script_qry.format(
+                ctry=paramctry, rgn=paramrgn, mkt=parammkt)
+                print(sql_script_qry)
+                self.create_persitent_tables(sql_script_qry, fname,col_partitionby,path_datalake,schema_loadtype)
+
+                ############## Record Successfull Message ##############
+
+                self.proc_capture_log(
+                fname, 'calculate_kpi', 'success', 'NA')
+            else:
+
+                ############## Record Validation Fail ##############
+
+                fname = tgt_tbl_nm[0]
+                self.proc_capture_log(
+                fname, 'calculate_kpi', 'validation', 'Fail')
+          except Exception as err:
+            #raise Exception(e)
+            err_desc = str(err).replace("'", "").replace(
+            '"', '').replace("\n", " ")
+            self.proc_capture_log(
+            fname, 'calculate_kpi', 'error', err_desc)
+
+    def calculate_kpi_main(self):
+        """ Function to act as single entry point for execution context """        
+        self.read_kpi_config()
+        self.get_kpilist()
+        self.create_source_temp_tables()        
+        self.create_stg_temp_tables()        
+        self.calculate_kpi()
+
+# # ############### Main() ###############
+if __name__ == "__main__":   
+    clsKPI=DataFeed('Activity','CRMF','TEST_CALLS_AG_M','', '/mnt/blob-devtest-kpi-foundation/unittest/KPI_Libraryttt.csv')  
+    clsKPI.calculate_kpi_main()
+
+#     # clsdata_feed = DataFeed('Activity','CRMF','TOTAL_CALLS_AG_TERR','', '/mnt/blob-devtest-kpi-foundation/Config/KPI_Library.csv')
+#     # clsdata_feed.calculate_kpi_main()
+
+
+
+
